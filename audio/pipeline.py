@@ -23,22 +23,13 @@ class AudioPipeline:
         self.position = 0
 
     def get_features(self) -> dict[str, float]:
-        """Return the amplitude of the current audio window."""
-        if self.signal is None:
-            raise RuntimeError("Audio must be loaded before extracting features.")
-
+        """Return the RMS amplitude of the current audio window."""
         start = self.position
         end = start + self.window_size
         window = self.signal[start:end]
 
-        if len(window) == 0:
-            self.position = 0
-            return {"amplitude": 0.0}
+        rms = float(np.sqrt(np.mean(window ** 2)))
 
-        amplitude = float(np.sqrt(np.mean(window ** 2)))
+        self.position += self.window_size
 
-        self.position = end
-        if self.position >= len(self.signal):
-            self.position = 0
-
-        return {"amplitude": amplitude}
+        return {"amplitude": rms}
