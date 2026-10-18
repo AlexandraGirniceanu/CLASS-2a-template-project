@@ -22,8 +22,13 @@ class AudioPipeline:
         )
         self.position = 0
 
+    
+
     def get_features(self) -> dict[str, float]:
         """Return the RMS amplitude of the current audio window."""
+        if self.position + self.window_size > len(self.signal):
+            self.position = 0
+
         start = self.position
         end = start + self.window_size
         window = self.signal[start:end]
@@ -33,3 +38,4 @@ class AudioPipeline:
         self.position += self.window_size
 
         return {"amplitude": rms}
+
