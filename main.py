@@ -15,7 +15,7 @@ from engines.pyglet_engine import PygletEngine
 
 # Set this to whichever engine tier your project uses. See the README for
 # how/why this is a one-time project decision, not a runtime toggle.
-ENGINE: type[BaseEngine] = ModernGLEngine
+ENGINE: type[BaseEngine] = PygletEngine
 
 AUDIO_FILE = "audio/grand_project-wonders-of-the-earth-550792.mp3"
 WINDOW_WIDTH = 1280

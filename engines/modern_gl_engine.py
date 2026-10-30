@@ -36,7 +36,7 @@ class ModernGLEngine(BaseEngine):
         # to the backend, not something to work around here.
         return not (self.window.is_closing or self._should_close)
 
-    def update(self, audio_features: dict) -> None:
+    def update(self, audio_features: dict, delta_time: float) -> None:
         pass
 
     def render(self) -> None:

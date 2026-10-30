@@ -1,23 +1,25 @@
+
 """Shared lifecycle every rendering engine implements, plus the run loop itself.
 
 The loop/timing/frame-budget mechanism is identical across all three engine
-tiers on purpose (Lecture 07: the render loop is the general, engine-agnostic
-principle; the specific drawing API is not). `run()` is deliberately not
-overridable, so subclasses can't accidentally diverge from that shared
-contract while filling in engine-specific behaviour.
+tiers on purpose. The specific drawing API belongs to each engine.
 """
 
 import time
 from abc import ABC, abstractmethod
 from collections.abc import Callable
 
-# Shared across all three stub engines so the "blank window" baseline looks
-# the same regardless of which tier a student has chosen.
 BACKGROUND_COLOR = (18, 18, 18)
 
 
 class BaseEngine(ABC):
-    def __init__(self, width: int, height: int, title: str, target_fps: int = 60) -> None:
+    def __init__(
+        self,
+        width: int,
+        height: int,
+        title: str,
+        target_fps: int = 60
+    ) -> None:
         self.width = width
         self.height = height
         self.title = title
@@ -25,18 +27,15 @@ class BaseEngine(ABC):
 
     @abstractmethod
     def setup(self) -> None:
-        """Create the window/rendering context. Called once, before the loop starts."""
+        """Create the window and rendering context."""
 
     @abstractmethod
     def handle_events(self) -> bool:
-        """Poll input/window events for this frame.
-
-        Return False to end the run loop (window close, Esc key, etc).
-        """
+        """Return False when the application should close."""
 
     @abstractmethod
-    def update(self, audio_features: dict) -> None:
-        """Advance state for this frame using the latest audio feature values."""
+    def update(self, audio_features: dict, delta_time: float) -> None:
+        """Advance the application state."""
 
     @abstractmethod
     def render(self) -> None:
@@ -44,31 +43,65 @@ class BaseEngine(ABC):
 
     @abstractmethod
     def teardown(self) -> None:
-        """Release engine resources on exit (close window/context)."""
+        """Release engine resources."""
 
     def run(self, feature_source: Callable[[], dict]) -> None:
-        """Owns the engine lifecycle: setup once, loop until handle_events()
-        returns False, then teardown. Do not override this method — every
-        engine tier shares this exact loop.
-        """
+        """Run the shared engine lifecycle and frame loop."""
+
         frame_duration = 1.0 / self.target_fps
+
         self.setup()
+
         try:
             running = True
+            previous_frame_time = time.perf_counter()
+
+            # FPS measurement variables must be outside the loop.
+            fps_elapsed = 0.0
+            fps_frames = 0
+            delta_time_printed = False
+
             while running:
                 frame_start = time.perf_counter()
 
+                delta_time = frame_start - previous_frame_time
+                previous_frame_time = frame_start
+
+                # Print delta_time once, in seconds.
+                if not delta_time_printed and fps_frames >= 10:
+                    print(f"delta_time: {delta_time:.6f} seconds")
+                    delta_time_printed = True
+
                 running = self.handle_events()
+
                 if not running:
                     break
 
                 audio_features = feature_source()
-                self.update(audio_features)
+
+                MAX_DELTA_TIME = 0.1
+                capped_delta_time = min(delta_time, MAX_DELTA_TIME)
+
+                self.update(audio_features, capped_delta_time)
                 self.render()
 
+                # Measure average FPS over approximately one second.
+                fps_elapsed += delta_time
+                fps_frames += 1
+
+                if fps_elapsed >= 1.0:
+                    average_fps = fps_frames / fps_elapsed
+                    print(f"Average FPS: {average_fps:.2f}")
+
+                    fps_elapsed = 0.0
+                    fps_frames = 0
+
+                # Maintain the target frame rate.
                 elapsed = time.perf_counter() - frame_start
                 remaining = frame_duration - elapsed
+
                 if remaining > 0:
                     time.sleep(remaining)
+
         finally:
             self.teardown()

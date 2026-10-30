@@ -195,10 +195,8 @@ while (
         "onset": features["onset"],
     })
 
-# Sort by onset strength, strongest first
 onset_results.sort(key=lambda item: item["onset"], reverse=True)
 
-# Keep hits at least 0.5 seconds apart
 selected_hits = []
 
 for hit in onset_results:
@@ -218,10 +216,7 @@ for number, hit in enumerate(selected_hits, start=1):
         f"Onset: {hit['onset']:.4f}"
     )
 
-    
-# Task 14: Compare custom onset detection with librosa
 
-# Task 14: Compare custom onset detection with librosa
 
 librosa_onset_times = librosa.onset.onset_detect(
     y=comparison_pipeline.signal,
@@ -268,7 +263,6 @@ print(
     len(custom_onsets) - len(shared)
 )
 
-# Task 15: Compare frequency-band energy with sample energy
 
 energy_window = pipeline.signal[start:start + window_size]
 

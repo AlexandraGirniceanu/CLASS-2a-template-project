@@ -17,7 +17,7 @@ class PygameEngine(BaseEngine):
                 return False
         return True
 
-    def update(self, audio_features: dict) -> None:
+    def update(self, audio_features: dict, delta_time: float) -> None:
         pass
 
     def render(self) -> None:
