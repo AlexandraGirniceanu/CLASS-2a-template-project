@@ -32,17 +32,12 @@ def run_full_app() -> None:
 
     pipeline.load()
 
-    print(f"Audio loaded: {AUDIO_FILE.name}")
-    print(f"Sample rate: {pipeline.sample_rate} Hz")
-    print(f"Duration: {pipeline.duration:.2f} seconds")
-
     audio_source = pyglet.media.load(
         str(AUDIO_FILE),
         streaming=True,
     )
 
     player = pyglet.media.Player()
-    player.loop = True
     player.queue(audio_source)
     player.volume = 0.7
 
@@ -53,19 +48,34 @@ def run_full_app() -> None:
         target_fps=TARGET_FPS,
     )
 
-    def get_audio_features() -> dict:
-        playback_time = player.time
+    duration = float(audio_source.duration or pipeline.duration)
+    restart_threshold = max(0.0, duration - 0.15)
 
-        if pipeline.duration > 0:
-            playback_time %= pipeline.duration
+    print(f"Audio loaded: {AUDIO_FILE.name}")
+    print(f"Sample rate: {pipeline.sample_rate} Hz")
+    print(f"Duration: {duration:.2f} seconds")
+    print("Press SPACE to change colour palette.")
+    print("Press ESC to exit.")
+    print("Starting synchronised audio playback...")
+
+    def get_audio_features() -> dict:
+        playback_time = max(0.0, player.time)
+
+        if playback_time >= restart_threshold:
+            player.pause()
+            player.seek(0.0)
+            player.play()
+
+            pipeline.previous_position = None
+            pipeline.previous_magnitudes = None
+            pipeline.smoothed_bands.fill(0.0)
+
+            playback_time = 0.0
+            print("Audio restarted.")
 
         return pipeline.get_features(
             playback_time=playback_time
         )
-
-    print("Press SPACE to change colour palette.")
-    print("Press ESC to exit.")
-    print("Starting synchronised audio playback...")
 
     try:
         player.play()
