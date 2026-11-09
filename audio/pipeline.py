@@ -4,9 +4,14 @@ import numpy as np
 
 
 class AudioPipeline:
-    def __init__(self, file_path: str, sample_rate: int = 22050) -> None:
+    def __init__(
+        self,
+        file_path: str,
+        sample_rate: int = 22050,
+    ) -> None:
         self.file_path = file_path
         self.sample_rate = sample_rate
+
         self.signal = None
         self.position = 0
         self.window_size = 1024
@@ -16,8 +21,12 @@ class AudioPipeline:
         self.band_count = 160
 
         self.previous_magnitudes = None
+        self.previous_position = None
 
-        self.hann_window = np.hanning(self.window_size)
+        self.hann_window = np.hanning(
+            self.window_size
+        )
+
         self.frequencies = np.fft.rfftfreq(
             self.window_size,
             d=1 / self.sample_rate,
@@ -42,9 +51,12 @@ class AudioPipeline:
         )
 
         self.position = 0
+        self.previous_position = None
         self.previous_magnitudes = None
 
-        self.hann_window = np.hanning(self.window_size)
+        self.hann_window = np.hanning(
+            self.window_size
+        )
 
         self.frequencies = np.fft.rfftfreq(
             self.window_size,
@@ -62,42 +74,62 @@ class AudioPipeline:
             dtype=np.float64,
         )
 
-    def get_features(self) -> dict:
+    @property
+    def duration(self) -> float:
+        if self.signal is None:
+            return 0.0
+
+        return len(self.signal) / self.sample_rate
+
+    def get_features(
+        self,
+        playback_time: float | None = None,
+    ) -> dict:
         if self.signal is None or len(self.signal) == 0:
             return self._empty_features()
 
-        if self.position >= len(self.signal):
-            self.position = 0
-            self.previous_magnitudes = None
+        signal_length = len(self.signal)
 
-        start = self.position
-        end = start + self.window_size
-
-        window = self.signal[start:end]
-
-        if len(window) < self.window_size:
-            remaining = self.window_size - len(window)
-
-            window = np.concatenate(
-                (
-                    window,
-                    self.signal[:remaining],
-                )
+        if playback_time is not None:
+            playback_time = max(
+                0.0,
+                float(playback_time),
             )
 
-        self.position = (
-            self.position + self.window_size
-        ) % len(self.signal)
+            self.position = int(
+                playback_time * self.sample_rate
+            ) % signal_length
+
+        start = self.position
+
+        if (
+            self.previous_position is not None
+            and start < self.previous_position
+        ):
+            self.previous_magnitudes = None
+            self.smoothed_bands.fill(0.0)
+
+        indices = (
+            start + np.arange(self.window_size)
+        ) % signal_length
+
+        window = self.signal[indices]
 
         rms = float(
             np.sqrt(
-                np.mean(window.astype(np.float64) ** 2)
+                np.mean(
+                    window.astype(np.float64) ** 2
+                )
             )
         )
 
-        peak = float(np.max(np.abs(window)))
+        peak = float(
+            np.max(np.abs(window))
+        )
 
-        windowed_audio = window * self.hann_window
+        windowed_audio = (
+            window * self.hann_window
+        )
 
         magnitudes = np.abs(
             np.fft.rfft(windowed_audio)
@@ -118,13 +150,23 @@ class AudioPipeline:
             self.frequencies >= self.treble_edge_hz
         )
 
-        bass = float(np.sum(power[bass_mask]))
-        mid = float(np.sum(power[mid_mask]))
-        treble = float(np.sum(power[treble_mask]))
+        bass = float(
+            np.sum(power[bass_mask])
+        )
 
-        magnitude_sum = float(np.sum(magnitudes))
+        mid = float(
+            np.sum(power[mid_mask])
+        )
 
-        if magnitude_sum > 0:
+        treble = float(
+            np.sum(power[treble_mask])
+        )
+
+        magnitude_sum = float(
+            np.sum(magnitudes)
+        )
+
+        if magnitude_sum > 0.0:
             centroid = float(
                 np.sum(
                     self.frequencies * magnitudes
@@ -145,11 +187,8 @@ class AudioPipeline:
                 np.sum(positive_difference)
             )
 
-        self.previous_magnitudes = magnitudes.copy()
-
-        frequency_bands = np.zeros(
-            self.band_count,
-            dtype=np.float64,
+        self.previous_magnitudes = (
+            magnitudes.copy()
         )
 
         bin_indices = np.searchsorted(
@@ -157,23 +196,32 @@ class AudioPipeline:
             self.band_edges,
         )
 
+        frequency_bands = np.zeros(
+            self.band_count,
+            dtype=np.float64,
+        )
+
         for index in range(self.band_count):
-            first = bin_indices[index]
-            last = bin_indices[index + 1]
+            first = min(
+                int(bin_indices[index]),
+                len(magnitudes) - 1,
+            )
+
+            last = min(
+                int(bin_indices[index + 1]),
+                len(magnitudes),
+            )
 
             if last <= first:
-                nearest = min(
-                    first,
-                    len(magnitudes) - 1,
-                )
-
-                band_energy = magnitudes[nearest]
+                band_energy = magnitudes[first]
             else:
                 band_energy = np.mean(
                     magnitudes[first:last]
                 )
 
-            frequency_bands[index] = band_energy
+            frequency_bands[index] = (
+                band_energy
+            )
 
         frequency_bands = np.log1p(
             frequency_bands
@@ -183,12 +231,20 @@ class AudioPipeline:
             np.max(frequency_bands)
         )
 
-        if maximum > 0:
+        if maximum > 0.0:
             frequency_bands /= maximum
 
         self.smoothed_bands += (
-            frequency_bands - self.smoothed_bands
+            frequency_bands
+            - self.smoothed_bands
         ) * 0.35
+
+        self.previous_position = start
+
+        if playback_time is None:
+            self.position = (
+                start + self.window_size
+            ) % signal_length
 
         return {
             "amplitude": rms,
@@ -198,7 +254,9 @@ class AudioPipeline:
             "treble": treble,
             "centroid": centroid,
             "onset": onset,
-            "frequency_bands": self.smoothed_bands.tolist(),
+            "frequency_bands": (
+                self.smoothed_bands.tolist()
+            ),
         }
 
     def _empty_features(self) -> dict:
@@ -210,5 +268,7 @@ class AudioPipeline:
             "treble": 0.0,
             "centroid": 0.0,
             "onset": 0.0,
-            "frequency_bands": [0.0] * self.band_count,
+            "frequency_bands": (
+                [0.0] * self.band_count
+            ),
         }

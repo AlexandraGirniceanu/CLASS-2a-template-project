@@ -1,6 +1,7 @@
 
 import math
 
+import numpy as np
 import pyglet
 from pyglet.gl import glClearColor
 from pyglet.window import key
@@ -28,21 +29,29 @@ class PygletEngine(BaseEngine):
         super().__init__(width, height, title, target_fps)
 
         self.palette_index = 0
-        self.current_palette = [
-            tuple(float(channel) for channel in colour)
-            for colour in self.PALETTES[0]
-        ]
-
-        self.bar_count = 160
-        self.base_radius = min(width, height) * 0.23
-        self.bar_heights = [12.0] * self.bar_count
-        self.target_heights = [12.0] * self.bar_count
+        self.palette = np.array(self.PALETTES[0], dtype=float)
+        self.time = 0.0
 
         self.amplitude = 0.0
-        self.smoothed_amplitude = 0.0
-        self.animation_time = 0.0
+        self.bass = 0.0
+        self.mid = 0.0
+        self.treble = 0.0
+        self.onset = 0.0
 
-        self.background_colour = (12, 5, 15)
+        self.bass_level = 0.0
+        self.mid_level = 0.0
+        self.treble_level = 0.0
+        self.onset_level = 0.0
+
+        self.rings = 28
+        self.segments = 64
+
+        self.vertices = None
+        self.edges = None
+        self.mesh_lines = []
+        self.glow_lines = []
+        self.grid_lines = []
+        self.background_shapes = []
         self._should_close = False
 
     def setup(self) -> None:
@@ -54,7 +63,13 @@ class PygletEngine(BaseEngine):
             vsync=True,
         )
 
-        glClearColor(0.047, 0.02, 0.059, 1.0)
+        glClearColor(0.035, 0.012, 0.045, 1.0)
+
+        self.batch = pyglet.graphics.Batch()
+        self.background_batch = pyglet.graphics.Batch()
+
+        self.create_mesh()
+        self.create_background()
 
         @self.window.event
         def on_close():
@@ -71,213 +86,460 @@ class PygletEngine(BaseEngine):
                 self.palette_index = (
                     self.palette_index + 1
                 ) % len(self.PALETTES)
+
                 return pyglet.event.EVENT_HANDLED
 
         @self.window.event
         def on_resize(width, height):
             self.width = width
             self.height = height
-            self.base_radius = min(width, height) * 0.23
+            self.update_background_geometry()
+
+    def create_mesh(self) -> None:
+        theta = np.linspace(
+            0.0,
+            math.pi,
+            self.rings + 1,
+        )
+
+        phi = np.linspace(
+            0.0,
+            math.tau,
+            self.segments,
+            endpoint=False,
+        )
+
+        theta_grid, phi_grid = np.meshgrid(
+            theta,
+            phi,
+            indexing="ij",
+        )
+
+        self.theta = theta_grid.ravel()
+        self.phi = phi_grid.ravel()
+
+        self.vertex_count = len(self.theta)
+
+        edges = []
+
+        for ring in range(self.rings + 1):
+            for segment in range(self.segments):
+                index = ring * self.segments + segment
+
+                next_segment = (
+                    ring * self.segments
+                    + (segment + 1) % self.segments
+                )
+
+                edges.append((index, next_segment))
+
+                if ring < self.rings:
+                    next_ring = (
+                        (ring + 1) * self.segments
+                        + segment
+                    )
+
+                    diagonal = (
+                        (ring + 1) * self.segments
+                        + (segment + 1) % self.segments
+                    )
+
+                    edges.append((index, next_ring))
+                    edges.append((index, diagonal))
+
+        self.edges = np.array(edges, dtype=np.int32)
+
+        self.mesh_lines = []
+        self.glow_lines = []
+
+        for index in range(len(self.edges)):
+            glow = pyglet.shapes.Line(
+                0, 0, 0, 0,
+                thickness=3.0,
+                color=(100, 30, 80),
+                batch=self.batch,
+            )
+
+            line = pyglet.shapes.Line(
+                0, 0, 0, 0,
+                thickness=1.0,
+                color=(255, 140, 200),
+                batch=self.batch,
+            )
+
+            glow.opacity = 25
+            line.opacity = 105
+
+            self.glow_lines.append(glow)
+            self.mesh_lines.append(line)
+
+    def create_background(self) -> None:
+        self.background_shapes = []
+        self.grid_lines = []
+
+        for index in range(24):
+            rectangle = pyglet.shapes.Rectangle(
+                0, 0,
+                self.width,
+                self.height,
+                color=(20, 5, 25),
+                batch=self.background_batch,
+            )
+
+            self.background_shapes.append(rectangle)
+
+        for index in range(40):
+            line = pyglet.shapes.Line(
+                0, 0, 0, 0,
+                thickness=1.0,
+                color=(120, 70, 110),
+                batch=self.background_batch,
+            )
+
+            line.opacity = 12
+            self.grid_lines.append(line)
+
+        self.update_background_geometry()
+
+    def update_background_geometry(self) -> None:
+        if not self.background_shapes:
+            return
+
+        for index, rectangle in enumerate(self.background_shapes):
+            rectangle.x = 0
+            rectangle.y = (
+                index * self.height
+                / len(self.background_shapes)
+            )
+
+            rectangle.width = self.width
+            rectangle.height = (
+                self.height / len(self.background_shapes) + 2
+            )
+
+        spacing = max(35, int(min(self.width, self.height) / 14))
+
+        for index, line in enumerate(self.grid_lines):
+            if index < 20:
+                x = (
+                    index - 10
+                ) * spacing + self.width / 2
+
+                line.x = x
+                line.y = 0
+                line.x2 = x
+                line.y2 = self.height
+
+            else:
+                y = (
+                    index - 30
+                ) * spacing + self.height / 2
+
+                line.x = 0
+                line.y = y
+                line.x2 = self.width
+                line.y2 = y
 
     def handle_events(self) -> bool:
         self.window.dispatch_events()
         return not self._should_close
 
-    def interpolate_colour(self, palette, position):
-        position = max(0.0, min(1.0, position))
+    def update(self, audio_features: dict, delta_time: float) -> None:
+        delta_time = min(max(delta_time, 0.0), 0.1)
+        self.time += delta_time
 
-        scaled = position * (len(palette) - 1)
-        first = min(int(scaled), len(palette) - 2)
-        second = first + 1
-        fraction = scaled - first
-
-        return tuple(
-            int(
-                palette[first][channel] * (1.0 - fraction)
-                + palette[second][channel] * fraction
-            )
-            for channel in range(3)
+        target_palette = np.array(
+            self.PALETTES[self.palette_index],
+            dtype=float,
         )
 
-    def update(self, audio_features: dict, delta_time: float) -> None:
-        delta_time = max(0.0, min(delta_time, 0.1))
-        self.animation_time += delta_time
+        colour_fraction = 1.0 - math.exp(
+            -3.5 * delta_time
+        )
 
-        raw_amplitude = audio_features.get("amplitude", 0.0)
+        self.palette += (
+            target_palette - self.palette
+        ) * colour_fraction
 
-        try:
-            raw_amplitude = float(raw_amplitude)
-        except (TypeError, ValueError):
-            raw_amplitude = 0.0
+        self.amplitude = max(
+            0.0,
+            float(audio_features.get("amplitude", 0.0)),
+        )
 
-        if not math.isfinite(raw_amplitude):
-            raw_amplitude = 0.0
+        self.bass = max(
+            0.0,
+            float(audio_features.get("bass", 0.0)),
+        )
 
-        self.amplitude = max(0.0, raw_amplitude)
+        self.mid = max(
+            0.0,
+            float(audio_features.get("mid", 0.0)),
+        )
 
-        amplitude_fraction = 1.0 - math.exp(-8.0 * delta_time)
+        self.treble = max(
+            0.0,
+            float(audio_features.get("treble", 0.0)),
+        )
 
-        self.smoothed_amplitude += (
-            self.amplitude - self.smoothed_amplitude
-        ) * amplitude_fraction
+        self.onset = max(
+            0.0,
+            float(audio_features.get("onset", 0.0)),
+        )
 
-        target_palette = self.PALETTES[self.palette_index]
-        colour_fraction = 1.0 - math.exp(-4.0 * delta_time)
+        bass_target = min(
+            1.0,
+            math.log1p(self.bass) / 8.0,
+        )
 
-        for index in range(len(self.current_palette)):
-            old_colour = self.current_palette[index]
-            new_colour = target_palette[index]
+        mid_target = min(
+            1.0,
+            math.log1p(self.mid) / 8.0,
+        )
 
-            self.current_palette[index] = tuple(
-                old_colour[channel]
-                + (
-                    new_colour[channel] - old_colour[channel]
-                ) * colour_fraction
-                for channel in range(3)
+        treble_target = min(
+            1.0,
+            math.log1p(self.treble) / 8.0,
+        )
+
+        onset_target = min(
+            1.0,
+            math.log1p(self.onset) / 7.0,
+        )
+
+        smoothing = 1.0 - math.exp(
+            -7.0 * delta_time
+        )
+
+        self.bass_level += (
+            bass_target - self.bass_level
+        ) * smoothing
+
+        self.mid_level += (
+            mid_target - self.mid_level
+        ) * smoothing
+
+        self.treble_level += (
+            treble_target - self.treble_level
+        ) * smoothing
+
+        self.onset_level += (
+            onset_target - self.onset_level
+        ) * smoothing
+
+        self.update_mesh()
+        self.update_background_colours()
+
+    def update_mesh(self) -> None:
+        t = self.time
+
+        theta = self.theta
+        phi = self.phi
+
+        bass_strength = self.bass_level
+        mid_strength = self.mid_level
+        treble_strength = self.treble_level
+
+        wave_one = np.sin(
+            theta * 4.0
+            + phi * 3.0
+            + t * 0.7
+        )
+
+        wave_two = np.sin(
+            theta * 7.0
+            - phi * 5.0
+            - t * 0.9
+        )
+
+        wave_three = np.sin(
+            theta * 12.0
+            + phi * 9.0
+            + t * 1.5
+        )
+
+        deformation = (
+            wave_one * (0.06 + mid_strength * 0.16)
+            + wave_two * (0.04 + bass_strength * 0.13)
+            + wave_three * (0.01 + treble_strength * 0.05)
+        )
+
+        pulse = (
+            1.0
+            + bass_strength * 0.18
+            + self.onset_level * 0.035
+        )
+
+        radius = (
+            1.0 + deformation
+        ) * pulse
+
+        x = (
+            radius
+            * np.sin(theta)
+            * np.cos(phi)
+        )
+
+        y = (
+            radius
+            * np.cos(theta)
+        )
+
+        z = (
+            radius
+            * np.sin(theta)
+            * np.sin(phi)
+        )
+
+        rotation = t * 0.12
+
+        rotated_x = (
+            x * math.cos(rotation)
+            + z * math.sin(rotation)
+        )
+
+        rotated_z = (
+            -x * math.sin(rotation)
+            + z * math.cos(rotation)
+        )
+
+        tilt = 0.23
+
+        rotated_y = (
+            y * math.cos(tilt)
+            - rotated_z * math.sin(tilt)
+        )
+
+        depth = (
+            y * math.sin(tilt)
+            + rotated_z * math.cos(tilt)
+        )
+
+        scale = min(
+            self.width,
+            self.height,
+        ) * 0.32
+
+        perspective = 3.5 / (
+            3.5 - depth * 0.22
+        )
+
+        screen_x = (
+            self.width / 2
+            + rotated_x * scale * perspective
+        )
+
+        screen_y = (
+            self.height / 2
+            + rotated_y * scale * perspective
+        )
+
+        vertices = np.column_stack(
+            (screen_x, screen_y)
+        )
+
+        start_points = vertices[self.edges[:, 0]]
+        end_points = vertices[self.edges[:, 1]]
+
+        average_depth = (
+            depth[self.edges[:, 0]]
+            + depth[self.edges[:, 1]]
+        ) * 0.5
+
+        depth_normalised = np.clip(
+            (average_depth + 1.5) / 3.0,
+            0.0,
+            1.0,
+        )
+
+        palette_indices = (
+            depth_normalised
+            * (len(self.palette) - 1)
+        )
+
+        first_indices = np.minimum(
+            palette_indices.astype(int),
+            len(self.palette) - 2,
+        )
+
+        fractions = (
+            palette_indices - first_indices
+        )[:, None]
+
+        colours = (
+            self.palette[first_indices]
+            * (1.0 - fractions)
+            + self.palette[first_indices + 1]
+            * fractions
+        )
+
+        for index, line in enumerate(self.mesh_lines):
+            x1, y1 = start_points[index]
+            x2, y2 = end_points[index]
+
+            line.x = float(x1)
+            line.y = float(y1)
+            line.x2 = float(x2)
+            line.y2 = float(y2)
+
+            colour = tuple(
+                int(value)
+                for value in colours[index]
             )
 
-        frequency_bands = audio_features.get("frequency_bands")
+            line.color = colour
 
-        if frequency_bands is None:
-            frequency_bands = audio_features.get("spectrum")
-
-        valid_bands = []
-
-        if frequency_bands is not None:
-            try:
-                for value in frequency_bands:
-                    number = float(value)
-                    if math.isfinite(number):
-                        valid_bands.append(max(0.0, number))
-                    else:
-                        valid_bands.append(0.0)
-            except (TypeError, ValueError):
-                valid_bands = []
-
-        for index in range(self.bar_count):
-            angle = (index / self.bar_count) * math.tau
-
-            if valid_bands:
-                band_position = (
-                    index / self.bar_count
-                ) * len(valid_bands)
-
-                band_index = min(
-                    int(band_position),
-                    len(valid_bands) - 1,
-                )
-
-                band_value = valid_bands[band_index]
-
-                energy = min(
-                    1.0,
-                    math.sqrt(band_value) * 2.5,
-                )
-            else:
-                wave_one = (
-                    math.sin(angle * 5.0 + self.animation_time * 1.4)
-                    + 1.0
-                ) * 0.5
-
-                wave_two = (
-                    math.sin(angle * 11.0 - self.animation_time * 0.8)
-                    + 1.0
-                ) * 0.5
-
-                energy = (
-                    wave_one * 0.65 + wave_two * 0.35
-                ) * min(1.0, self.smoothed_amplitude * 5.0)
-
-            self.target_heights[index] = (
-                8.0 + energy * 125.0
+            line.opacity = int(
+                45 + depth_normalised[index] * 125
             )
 
-            smoothing = 1.0 - math.exp(-12.0 * delta_time)
+            glow = self.glow_lines[index]
 
-            self.bar_heights[index] += (
-                self.target_heights[index]
-                - self.bar_heights[index]
-            ) * smoothing
+            glow.x = float(x1)
+            glow.y = float(y1)
+            glow.x2 = float(x2)
+            glow.y2 = float(y2)
+
+            glow.color = colour
+            glow.opacity = int(
+                8 + depth_normalised[index] * 20
+            )
+
+    def update_background_colours(self) -> None:
+        base = self.palette[0]
+        highlight = self.palette[2]
+
+        for index, rectangle in enumerate(self.background_shapes):
+            position = (
+                index / len(self.background_shapes)
+            )
+
+            glow = math.exp(
+                -((position - 0.55) ** 2) / 0.085
+            )
+
+            colour = (
+                base * 0.10
+                + highlight * glow * 0.11
+                + np.array([6, 4, 12])
+            )
+
+            rectangle.color = tuple(
+                int(min(255, value))
+                for value in colour
+            )
+
+        grid_colour = tuple(
+            int(value)
+            for value in self.palette[1]
+        )
+
+        for line in self.grid_lines:
+            line.color = grid_colour
 
     def render(self) -> None:
         self.window.clear()
-
-        centre_x = self.width / 2
-        centre_y = self.height / 2
-
-        scale = min(self.width / 1280, self.height / 720)
-        scale = max(0.3, scale)
-
-        pulse = min(1.0, self.smoothed_amplitude * 3.0)
-        radius = self.base_radius + pulse * 12.0 * scale
-
-        batch = pyglet.graphics.Batch()
-
-        outer_circle = pyglet.shapes.Arc(
-            x=centre_x,
-            y=centre_y,
-            radius=radius - 10.0 * scale,
-            color=(255, 225, 240),
-            thickness=max(1.0, 2.0 * scale),
-            segments=180,
-            batch=batch,
-        )
-
-        inner_circle = pyglet.shapes.Arc(
-            x=centre_x,
-            y=centre_y,
-            radius=radius - 17.0 * scale,
-            color=self.interpolate_colour(
-                self.current_palette, 0.7
-            ),
-            thickness=max(1.0, 1.0 * scale),
-            segments=180,
-            batch=batch,
-        )
-
-        bars = []
-
-        for index in range(self.bar_count):
-            angle = (
-                index / self.bar_count
-            ) * math.tau - math.pi / 2
-
-            bar_height = self.bar_heights[index] * scale
-
-            inner_radius = radius + 5.0 * scale
-            outer_radius = inner_radius + bar_height
-
-            x1 = centre_x + math.cos(angle) * inner_radius
-            y1 = centre_y + math.sin(angle) * inner_radius
-
-            x2 = centre_x + math.cos(angle) * outer_radius
-            y2 = centre_y + math.sin(angle) * outer_radius
-
-            colour_position = (
-                math.sin(angle + math.pi / 2) + 1.0
-            ) * 0.5
-
-            colour = self.interpolate_colour(
-                self.current_palette,
-                colour_position,
-            )
-
-            
-            bar = pyglet.shapes.Line(
-                x=x1,
-                y=y1,
-                x2=x2,
-                y2=y2,
-                thickness=max(1.0, 3.0 * scale),
-                color=colour,
-                batch=batch,
-            )
-
-
-            bars.append(bar)
-
-        batch.draw()
-
+        self.background_batch.draw()
+        self.batch.draw()
         self.window.flip()
 
     def teardown(self) -> None:

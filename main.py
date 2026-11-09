@@ -1,8 +1,10 @@
 
 from pathlib import Path
 
+import pyglet
+
 from audio.pipeline import AudioPipeline
-from engines.pyglet_engine import PygletEngine
+from engines.modern_gl_engine import ModernGLEngine
 
 
 AUDIO_FILE = (
@@ -30,24 +32,51 @@ def run_full_app() -> None:
 
     pipeline.load()
 
-    duration = len(pipeline.signal) / pipeline.sample_rate
-
     print(f"Audio loaded: {AUDIO_FILE.name}")
     print(f"Sample rate: {pipeline.sample_rate} Hz")
-    print(f"Duration: {duration:.2f} seconds")
-    print("Press SPACE to change colour palette.")
-    print("Press ESC to exit.")
+    print(f"Duration: {pipeline.duration:.2f} seconds")
 
-    engine = PygletEngine(
+    audio_source = pyglet.media.load(
+        str(AUDIO_FILE),
+        streaming=True,
+    )
+
+    player = pyglet.media.Player()
+    player.loop = True
+    player.queue(audio_source)
+    player.volume = 0.7
+
+    engine = ModernGLEngine(
         width=WINDOW_WIDTH,
         height=WINDOW_HEIGHT,
         title=WINDOW_TITLE,
         target_fps=TARGET_FPS,
     )
 
-    engine.run(
-        feature_source=pipeline.get_features
-    )
+    def get_audio_features() -> dict:
+        playback_time = player.time
+
+        if pipeline.duration > 0:
+            playback_time %= pipeline.duration
+
+        return pipeline.get_features(
+            playback_time=playback_time
+        )
+
+    print("Press SPACE to change colour palette.")
+    print("Press ESC to exit.")
+    print("Starting synchronised audio playback...")
+
+    try:
+        player.play()
+
+        engine.run(
+            feature_source=get_audio_features
+        )
+
+    finally:
+        player.pause()
+        player.delete()
 
 
 if __name__ == "__main__":
