@@ -4,8 +4,6 @@ import numpy as np
 
 
 class AudioPipeline:
-    """Loads an audio file and extracts features from it, frame by frame."""
-
     def __init__(self, file_path: str, sample_rate: int = 22050) -> None:
         self.file_path = file_path
         self.sample_rate = sample_rate
@@ -15,73 +13,202 @@ class AudioPipeline:
 
         self.bass_edge_hz = 250
         self.treble_edge_hz = 2000
+        self.band_count = 160
 
         self.previous_magnitudes = None
 
+        self.hann_window = np.hanning(self.window_size)
+        self.frequencies = np.fft.rfftfreq(
+            self.window_size,
+            d=1 / self.sample_rate,
+        )
+
+        self.band_edges = np.geomspace(
+            30,
+            self.sample_rate / 2,
+            self.band_count + 1,
+        )
+
+        self.smoothed_bands = np.zeros(
+            self.band_count,
+            dtype=np.float64,
+        )
+
     def load(self) -> None:
-        """Load the audio file and store the signal and sample rate."""
         self.signal, self.sample_rate = librosa.load(
             self.file_path,
             sr=self.sample_rate,
             mono=True,
         )
+
         self.position = 0
         self.previous_magnitudes = None
 
-    def get_features(self) -> dict[str, float]:
-        """Return amplitude and spectral features for the current window."""
-        if self.position + self.window_size > len(self.signal):
-            self.position = 0
+        self.hann_window = np.hanning(self.window_size)
 
-        start = self.position
-        end = start + self.window_size
-        window = self.signal[start:end]
-
-        rms = float(np.sqrt(np.mean(window ** 2)))
-
-        hann_window = np.hanning(self.window_size)
-        windowed_audio = window * hann_window
-        magnitudes = np.abs(np.fft.rfft(windowed_audio))
-
-        frequencies = np.fft.rfftfreq(
+        self.frequencies = np.fft.rfftfreq(
             self.window_size,
             d=1 / self.sample_rate,
         )
-        bass_edge_bin = round(
-            self.bass_edge_hz * self.window_size / self.sample_rate
-        )
-        treble_edge_bin = round(
-            self.treble_edge_hz * self.window_size / self.sample_rate
+
+        self.band_edges = np.geomspace(
+            30,
+            self.sample_rate / 2,
+            self.band_count + 1,
         )
 
-        bass = float(np.sum(magnitudes[:bass_edge_bin] ** 2))
-        mid = float(
-            np.sum(magnitudes[bass_edge_bin:treble_edge_bin] ** 2)
+        self.smoothed_bands = np.zeros(
+            self.band_count,
+            dtype=np.float64,
         )
-        treble = float(np.sum(magnitudes[treble_edge_bin:] ** 2))
 
-        magnitude_sum = np.sum(magnitudes)
+    def get_features(self) -> dict:
+        if self.signal is None or len(self.signal) == 0:
+            return self._empty_features()
+
+        if self.position >= len(self.signal):
+            self.position = 0
+            self.previous_magnitudes = None
+
+        start = self.position
+        end = start + self.window_size
+
+        window = self.signal[start:end]
+
+        if len(window) < self.window_size:
+            remaining = self.window_size - len(window)
+
+            window = np.concatenate(
+                (
+                    window,
+                    self.signal[:remaining],
+                )
+            )
+
+        self.position = (
+            self.position + self.window_size
+        ) % len(self.signal)
+
+        rms = float(
+            np.sqrt(
+                np.mean(window.astype(np.float64) ** 2)
+            )
+        )
+
+        peak = float(np.max(np.abs(window)))
+
+        windowed_audio = window * self.hann_window
+
+        magnitudes = np.abs(
+            np.fft.rfft(windowed_audio)
+        )
+
+        power = magnitudes ** 2
+
+        bass_mask = (
+            self.frequencies < self.bass_edge_hz
+        )
+
+        mid_mask = (
+            (self.frequencies >= self.bass_edge_hz)
+            & (self.frequencies < self.treble_edge_hz)
+        )
+
+        treble_mask = (
+            self.frequencies >= self.treble_edge_hz
+        )
+
+        bass = float(np.sum(power[bass_mask]))
+        mid = float(np.sum(power[mid_mask]))
+        treble = float(np.sum(power[treble_mask]))
+
+        magnitude_sum = float(np.sum(magnitudes))
+
         if magnitude_sum > 0:
-            centroid = float(np.sum(frequencies * magnitudes) / magnitude_sum)
+            centroid = float(
+                np.sum(
+                    self.frequencies * magnitudes
+                ) / magnitude_sum
+            )
         else:
             centroid = 0.0
+
         if self.previous_magnitudes is None:
             onset = 0.0
         else:
             positive_difference = np.maximum(
                 magnitudes - self.previous_magnitudes,
-                0,
+                0.0,
             )
-            onset = float(np.sum(positive_difference))
+
+            onset = float(
+                np.sum(positive_difference)
+            )
 
         self.previous_magnitudes = magnitudes.copy()
-        
-        self.position += self.window_size
+
+        frequency_bands = np.zeros(
+            self.band_count,
+            dtype=np.float64,
+        )
+
+        bin_indices = np.searchsorted(
+            self.frequencies,
+            self.band_edges,
+        )
+
+        for index in range(self.band_count):
+            first = bin_indices[index]
+            last = bin_indices[index + 1]
+
+            if last <= first:
+                nearest = min(
+                    first,
+                    len(magnitudes) - 1,
+                )
+
+                band_energy = magnitudes[nearest]
+            else:
+                band_energy = np.mean(
+                    magnitudes[first:last]
+                )
+
+            frequency_bands[index] = band_energy
+
+        frequency_bands = np.log1p(
+            frequency_bands
+        )
+
+        maximum = float(
+            np.max(frequency_bands)
+        )
+
+        if maximum > 0:
+            frequency_bands /= maximum
+
+        self.smoothed_bands += (
+            frequency_bands - self.smoothed_bands
+        ) * 0.35
+
         return {
             "amplitude": rms,
+            "peak": peak,
             "bass": bass,
             "mid": mid,
             "treble": treble,
             "centroid": centroid,
             "onset": onset,
+            "frequency_bands": self.smoothed_bands.tolist(),
+        }
+
+    def _empty_features(self) -> dict:
+        return {
+            "amplitude": 0.0,
+            "peak": 0.0,
+            "bass": 0.0,
+            "mid": 0.0,
+            "treble": 0.0,
+            "centroid": 0.0,
+            "onset": 0.0,
+            "frequency_bands": [0.0] * self.band_count,
         }
